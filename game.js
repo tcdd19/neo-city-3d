@@ -3,6 +3,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SoundEffects } from './audio.js';
 import {
   setMaxAnisotropy,
+  createCityEnvironmentMap,
+  createVolumetricCloud,
   createAsphaltTexture,
   createSidewalkTexture,
   createTreeMesh,
@@ -34,7 +36,7 @@ function vibrateDevice(pattern) {
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x6ec6ff);
-scene.fog = new THREE.FogExp2(0x6ec6ff, 0.0042);
+scene.fog = new THREE.FogExp2(0x6ec6ff, 0.004);
 
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.5, 360);
 camera.position.set(isMobileDevice ? 62 : 52, isMobileDevice ? 48 : 42, isMobileDevice ? 72 : 62);
@@ -45,11 +47,12 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.08;
+renderer.toneMappingExposure = 1.1;
 container.appendChild(renderer.domElement);
 
-// Enable maximum anisotropic filtering for crisp textures at oblique angles
+// Enable maximum anisotropic filtering & Sky/City Environment Reflections
 setMaxAnisotropy(renderer.capabilities.getMaxAnisotropy());
+scene.environment = createCityEnvironmentMap(renderer, '#3a86ff', '#d0efff', '#1e293b');
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -67,10 +70,10 @@ controls.touches = {
 };
 
 // --- Lights ---
-const hemiLight = new THREE.HemisphereLight(0xdff4ff, 0x3b4d3b, 0.88);
+const hemiLight = new THREE.HemisphereLight(0xdff4ff, 0x3b4d3b, 0.92);
 scene.add(hemiLight);
 
-const sunLight = new THREE.DirectionalLight(0xfff6e5, 1.5);
+const sunLight = new THREE.DirectionalLight(0xfff6e5, 1.55);
 sunLight.position.set(55, 78, 45);
 sunLight.castShadow = true;
 const shadowRes = isMobileDevice ? 1536 : 2048;
@@ -101,7 +104,7 @@ const pedestrians = [];
 function buildCityInfrastructure() {
   const water = new THREE.Mesh(
     new THREE.PlaneGeometry(380, 380),
-    new THREE.MeshStandardMaterial({ color: 0x1565c0, roughness: 0.2, metalness: 0.25 })
+    new THREE.MeshStandardMaterial({ color: 0x1565c0, roughness: 0.18, metalness: 0.35 })
   );
   water.rotation.x = -Math.PI / 2;
   water.position.y = -0.5;
@@ -114,7 +117,7 @@ function buildCityInfrastructure() {
     new THREE.MeshStandardMaterial({
       map: sidewalkTex,
       color: 0x90a4ae,
-      roughness: 0.85
+      roughness: 0.82
     })
   );
   ground.position.y = -0.4;
@@ -122,11 +125,10 @@ function buildCityInfrastructure() {
   scene.add(ground);
   window.__cityGroundMat = ground.material;
 
-  // High-Res Asphalt Roads & Dashed Lane Markings
   const asphaltTex = createAsphaltTexture();
   const roadMat = new THREE.MeshStandardMaterial({
     map: asphaltTex,
-    roughness: 0.72,
+    roughness: 0.7,
     bumpMap: asphaltTex,
     bumpScale: 0.02
   });
@@ -162,7 +164,6 @@ function buildCityInfrastructure() {
     }
   });
 
-  // Crosswalks & Streetlamps at intersections
   ROAD_COORDS.forEach((rx) => {
     ROAD_COORDS.forEach((rz) => {
       for (let s = -1.5; s <= 1.5; s += 0.6) {
@@ -180,7 +181,6 @@ function buildCityInfrastructure() {
     });
   });
 
-  // Outer Perimeter Boulevard Trees
   const treeTypes = ['oak', 'pine', 'cherry'];
   for (let p = -42; p <= 42; p += 7) {
     [[-45, p], [45, p], [p, -45], [p, 45]].forEach(([tx, tz], i) => {
@@ -191,7 +191,6 @@ function buildCityInfrastructure() {
     });
   }
 
-  // Create 5x5 Interactive City Plots
   PLOT_COORDS.forEach((px, rIdx) => {
     PLOT_COORDS.forEach((pz, cIdx) => {
       const selectorMesh = new THREE.Mesh(
@@ -297,30 +296,21 @@ function syncPedestriansCount(targetCount) {
   document.getElementById('stat-peds').textContent = pedestrians.length;
 }
 
-// --- Weather & Atmosphere System ---
+// --- Volumetric Clouds & Weather System ---
 let currentWeather = 'sunny';
 const cloudsGroup = new THREE.Group();
 scene.add(cloudsGroup);
 
 function buildClouds() {
-  const cloudMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.9,
-    transparent: true,
-    opacity: 0.88
-  });
-  for (let i = 0; i < 14; i++) {
-    const cg = new THREE.Group();
-    for (let j = 0; j < 4; j++) {
-      const puff = new THREE.Mesh(
-        new THREE.DodecahedronGeometry(2.6 + Math.random() * 1.8, 1),
-        cloudMat
-      );
-      puff.position.set((j - 1.5) * 2.1, (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 1.6);
-      cg.add(puff);
-    }
-    cg.position.set((Math.random() - 0.5) * 140, 38 + Math.random() * 14, (Math.random() - 0.5) * 140);
-    cg.userData.speed = 1.2 + Math.random() * 1.5;
+  for (let i = 0; i < 16; i++) {
+    const cg = createVolumetricCloud();
+    const scale = 0.85 + Math.random() * 0.7;
+    cg.scale.setScalar(scale);
+    cg.position.set(
+      (Math.random() - 0.5) * 160,
+      38 + Math.random() * 14,
+      (Math.random() - 0.5) * 150
+    );
     cloudsGroup.add(cg);
   }
 }
@@ -364,7 +354,7 @@ function isNightLightActive() {
 }
 
 function applyLightingToNewPlot(group) {
-  const emissiveVal = currentWeather === 'night' ? 1.35 : isNightLightActive() ? 0.78 : 0.18;
+  const emissiveVal = currentWeather === 'night' ? 1.4 : isNightLightActive() ? 0.82 : 0.22;
   if (group.userData.emissiveMeshes) {
     group.userData.emissiveMeshes.forEach((m) => {
       m.emissiveIntensity = emissiveVal;
@@ -381,62 +371,74 @@ function setWeather(mode) {
     sunny: {
       sky: 0x6ec6ff,
       fogColor: 0x6ec6ff,
-      fogDensity: 0.004,
+      fogDensity: 0.0038,
       sunColor: 0xfff6e5,
-      sunInt: 1.5,
-      hemiInt: 0.88,
+      sunInt: 1.55,
+      hemiInt: 0.9,
       sunPos: [55, 78, 45],
-      groundColor: 0x90a4ae
+      groundColor: 0x90a4ae,
+      cloudColor: 0xffffff,
+      cloudEmissive: 0xdbeafe
     },
     sunset: {
       sky: 0xff7b54,
       fogColor: 0xff9770,
-      fogDensity: 0.0058,
+      fogDensity: 0.0055,
       sunColor: 0xff8c42,
-      sunInt: 1.3,
-      hemiInt: 0.65,
+      sunInt: 1.35,
+      hemiInt: 0.68,
       sunPos: [-68, 26, 40],
-      groundColor: 0x8d6e63
+      groundColor: 0x8d6e63,
+      cloudColor: 0xffd1b3,
+      cloudEmissive: 0xff7b54
     },
     night: {
       sky: 0x070d19,
       fogColor: 0x070d19,
-      fogDensity: 0.0062,
+      fogDensity: 0.006,
       sunColor: 0x5c7cfa,
-      sunInt: 0.32,
-      hemiInt: 0.3,
+      sunInt: 0.35,
+      hemiInt: 0.32,
       sunPos: [-40, 60, -40],
-      groundColor: 0x37474f
+      groundColor: 0x37474f,
+      cloudColor: 0x1e293b,
+      cloudEmissive: 0x0f172a
     },
     rain: {
       sky: 0x263238,
       fogColor: 0x263238,
-      fogDensity: 0.009,
+      fogDensity: 0.0088,
       sunColor: 0x90a4ae,
       sunInt: 0.52,
       hemiInt: 0.45,
       sunPos: [20, 65, 20],
-      groundColor: 0x455a64
+      groundColor: 0x455a64,
+      cloudColor: 0x607d8b,
+      cloudEmissive: 0x263238
     },
     snow: {
       sky: 0xcfd8dc,
       fogColor: 0xcfd8dc,
-      fogDensity: 0.0088,
+      fogDensity: 0.0085,
       sunColor: 0xffffff,
       sunInt: 0.98,
       hemiInt: 0.88,
       sunPos: [40, 65, 30],
-      groundColor: 0xeceff1
+      groundColor: 0xeceff1,
+      cloudColor: 0xffffff,
+      cloudEmissive: 0xe2e8f0
     },
     fog: {
       sky: 0xb0bec5,
       fogColor: 0xb0bec5,
-      fogDensity: 0.017,
+      fogDensity: 0.0165,
       sunColor: 0xeceff1,
       sunInt: 0.68,
       hemiInt: 0.72,
       sunPos: [30, 50, 30],
-      groundColor: 0x78909c
+      groundColor: 0x78909c,
+      cloudColor: 0xe2e8f0,
+      cloudEmissive: 0x94a3b8
     }
   };
 
@@ -449,15 +451,26 @@ function setWeather(mode) {
   sunLight.position.set(...cfg.sunPos);
   hemiLight.intensity = cfg.hemiInt;
 
+  // Tint Volumetric Clouds for current time/weather
+  cloudsGroup.children.forEach((cg) => {
+    if (cg.userData.coreMat) {
+      cg.userData.coreMat.color.setHex(cfg.cloudColor);
+      cg.userData.coreMat.emissive.setHex(cfg.cloudEmissive);
+    }
+    if (cg.userData.spriteMat) {
+      cg.userData.spriteMat.color.setHex(cfg.cloudColor);
+    }
+  });
+
   if (window.__cityGroundMat) {
     window.__cityGroundMat.color.setHex(cfg.groundColor);
     window.__cityGroundMat.roughness = mode === 'rain' ? 0.2 : 0.85;
   }
   if (window.__cityRoadMat) {
-    window.__cityRoadMat.roughness = mode === 'rain' ? 0.18 : 0.72;
+    window.__cityRoadMat.roughness = mode === 'rain' ? 0.18 : 0.7;
   }
 
-  const nightGlow = mode === 'night' ? 1.35 : isNightLightActive() ? 0.78 : 0.18;
+  const nightGlow = mode === 'night' ? 1.4 : isNightLightActive() ? 0.82 : 0.22;
   plots.forEach((p) => {
     if (p.contentGroup && p.contentGroup.userData.emissiveMeshes) {
       p.contentGroup.userData.emissiveMeshes.forEach((m) => {
@@ -518,7 +531,7 @@ function startTowerBloxxOnPlot(plotObj) {
   towerGroup.position.set(plotObj.x, 0, plotObj.z);
 
   const basePad = new THREE.Mesh(
-    new THREE.BoxGeometry(PLOT_SIZE - 0.5, 0.4, PLOT_SIZE - 0.5),
+    new THREE.BoxGeometry(PLOT_SIZE - 0.4, 0.4, PLOT_SIZE - 0.4),
     new THREE.MeshStandardMaterial({ map: createSidewalkTexture(), roughness: 0.8 })
   );
   basePad.position.y = 0.2;
@@ -759,7 +772,7 @@ function updateHUDStats() {
   document.getElementById('stat-trees').textContent = treeTotal;
 }
 
-// --- Raycasting & User Interaction (PC Mouse & Mobile Touch) ---
+// --- Raycasting & User Interaction ---
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let activeTool = 'inspect';
@@ -773,7 +786,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 
 renderer.domElement.addEventListener('pointerup', (e) => {
   const moveDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
-  if (moveDist > 9) return; // Ignore camera drag/pinch
+  if (moveDist > 9) return;
 
   if (bloxxState.active) {
     dropActiveBloxxFloor();
@@ -1000,9 +1013,11 @@ function animate() {
     }
   });
 
+  // Drift & gently billow volumetric clouds
   cloudsGroup.children.forEach((c) => {
     c.position.x += c.userData.speed * dt;
-    if (c.position.x > 75) c.position.x = -75;
+    c.position.y += Math.sin(elapsed * 0.8 + c.userData.bobPhase) * 0.004;
+    if (c.position.x > 85) c.position.x = -85;
   });
 
   if (currentWeather === 'rain') {
