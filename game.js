@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SoundEffects } from './audio.js';
 import {
+  setMaxAnisotropy,
+  createAsphaltTexture,
+  createSidewalkTexture,
   createTreeMesh,
   createParkPlot,
   createBuildingPlot,
@@ -17,15 +20,24 @@ import {
 } from './entities.js';
 
 const sfx = new SoundEffects();
+const isMobileDevice = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || window.innerWidth <= 900;
+
+function vibrateDevice(pattern) {
+  if (navigator.vibrate) {
+    try {
+      navigator.vibrate(pattern);
+    } catch (_) {}
+  }
+}
 
 // --- Scene, Camera, Renderer ---
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x6ec6ff);
-scene.fog = new THREE.FogExp2(0x6ec6ff, 0.0045);
+scene.fog = new THREE.FogExp2(0x6ec6ff, 0.0042);
 
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.5, 350);
-camera.position.set(52, 42, 62);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.5, 360);
+camera.position.set(isMobileDevice ? 62 : 52, isMobileDevice ? 48 : 42, isMobileDevice ? 72 : 62);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -33,26 +45,37 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.08;
 container.appendChild(renderer.domElement);
+
+// Enable maximum anisotropic filtering for crisp textures at oblique angles
+setMaxAnisotropy(renderer.capabilities.getMaxAnisotropy());
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
+controls.rotateSpeed = isMobileDevice ? 0.75 : 0.9;
+controls.zoomSpeed = isMobileDevice ? 1.15 : 1.0;
+controls.panSpeed = isMobileDevice ? 0.85 : 0.9;
 controls.maxPolarAngle = Math.PI / 2 - 0.03;
 controls.minDistance = 8;
-controls.maxDistance = 155;
+controls.maxDistance = 165;
 controls.target.set(0, 4, 0);
+controls.touches = {
+  ONE: THREE.TOUCH.ROTATE,
+  TWO: THREE.TOUCH.DOLLY_PAN
+};
 
 // --- Lights ---
-const hemiLight = new THREE.HemisphereLight(0xdff4ff, 0x3b4d3b, 0.85);
+const hemiLight = new THREE.HemisphereLight(0xdff4ff, 0x3b4d3b, 0.88);
 scene.add(hemiLight);
 
-const sunLight = new THREE.DirectionalLight(0xfff6e5, 1.45);
+const sunLight = new THREE.DirectionalLight(0xfff6e5, 1.5);
 sunLight.position.set(55, 78, 45);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.width = 2048;
-sunLight.shadow.mapSize.height = 2048;
+const shadowRes = isMobileDevice ? 1536 : 2048;
+sunLight.shadow.mapSize.width = shadowRes;
+sunLight.shadow.mapSize.height = shadowRes;
 sunLight.shadow.camera.near = 10;
 sunLight.shadow.camera.far = 210;
 const d = 62;
@@ -68,7 +91,7 @@ const PLOT_COORDS = [-34, -17, 0, 17, 34]; // 5x5 city blocks
 const ROAD_COORDS = [-25.5, -8.5, 8.5, 25.5]; // 4 avenues + 4 streets
 const PLOT_SIZE = 12.2;
 
-const plots = []; // Stores { row, col, x, z, baseMesh, contentGroup }
+const plots = [];
 const allTrees = [];
 const streetLamps = [];
 const vehicles = [];
@@ -76,45 +99,55 @@ const pedestrians = [];
 
 // --- Build Base Terrain & Road Network ---
 function buildCityInfrastructure() {
-  // Surrounding green island & water moat
   const water = new THREE.Mesh(
-    new THREE.PlaneGeometry(360, 360),
-    new THREE.MeshStandardMaterial({ color: 0x1976d2, roughness: 0.25, metalness: 0.2 })
+    new THREE.PlaneGeometry(380, 380),
+    new THREE.MeshStandardMaterial({ color: 0x1565c0, roughness: 0.2, metalness: 0.25 })
   );
   water.rotation.x = -Math.PI / 2;
   water.position.y = -0.5;
   scene.add(water);
 
+  const sidewalkTex = createSidewalkTexture();
+  sidewalkTex.repeat.set(16, 16);
   const ground = new THREE.Mesh(
     new THREE.BoxGeometry(102, 0.8, 102),
-    new THREE.MeshStandardMaterial({ color: 0x2b3440, roughness: 0.88 })
+    new THREE.MeshStandardMaterial({
+      map: sidewalkTex,
+      color: 0x90a4ae,
+      roughness: 0.85
+    })
   );
   ground.position.y = -0.4;
   ground.receiveShadow = true;
   scene.add(ground);
   window.__cityGroundMat = ground.material;
 
-  // Roads & Dashed Lane Markings
-  const roadMat = new THREE.MeshStandardMaterial({ color: 0x222730, roughness: 0.75 });
+  // High-Res Asphalt Roads & Dashed Lane Markings
+  const asphaltTex = createAsphaltTexture();
+  const roadMat = new THREE.MeshStandardMaterial({
+    map: asphaltTex,
+    roughness: 0.72,
+    bumpMap: asphaltTex,
+    bumpScale: 0.02
+  });
+  window.__cityRoadMat = roadMat;
+
   const lineMat = new THREE.MeshBasicMaterial({ color: 0xffd54f });
   const crossMat = new THREE.MeshBasicMaterial({ color: 0xeceff1 });
 
   ROAD_COORDS.forEach((rc) => {
-    // Z-axis road
-    const roadZ = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 94), roadMat);
+    const roadZ = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 94), roadMat);
     roadZ.rotation.x = -Math.PI / 2;
     roadZ.position.set(rc, 0.02, 0);
     roadZ.receiveShadow = true;
     scene.add(roadZ);
 
-    // X-axis road
-    const roadX = new THREE.Mesh(new THREE.PlaneGeometry(94, 4.4), roadMat);
+    const roadX = new THREE.Mesh(new THREE.PlaneGeometry(94, 4.5), roadMat);
     roadX.rotation.x = -Math.PI / 2;
     roadX.position.set(0, 0.025, rc);
     roadX.receiveShadow = true;
     scene.add(roadX);
 
-    // Dashed yellow center lines
     for (let p = -42; p <= 42; p += 5) {
       if (ROAD_COORDS.some((r) => Math.abs(p - r) < 3.2)) continue;
       const dashZ = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 2.2), lineMat);
@@ -180,7 +213,6 @@ function buildCityInfrastructure() {
       scene.add(selectorMesh);
       plots.push(plotObj);
 
-      // Default City Layout: Center is Central Park, surrounded by skyscrapers, residential, shops
       if (rIdx === 2 && cIdx === 2) {
         populatePlot(plotObj, 'park', false);
       } else if ((rIdx === 1 || rIdx === 3) && (cIdx === 1 || cIdx === 3)) {
@@ -203,7 +235,10 @@ function populatePlot(plotObj, type, playSound = true) {
   }
 
   if (type === 'empty') {
-    if (playSound) sfx.playDemolish();
+    if (playSound) {
+      sfx.playDemolish();
+      vibrateDevice(30);
+    }
     updateHUDStats();
     return;
   }
@@ -218,14 +253,16 @@ function populatePlot(plotObj, type, playSound = true) {
   group.position.set(plotObj.x, 0, plotObj.z);
   group.userData.plotRef = plotObj;
 
-  // Pop-in scale animation
   group.scale.set(0.01, 0.01, 0.01);
   group.userData.targetScale = 1;
 
   scene.add(group);
   plotObj.contentGroup = group;
 
-  if (playSound) sfx.playBuild();
+  if (playSound) {
+    sfx.playBuild();
+    vibrateDevice(25);
+  }
   applyLightingToNewPlot(group);
   updateHUDStats();
 }
@@ -234,7 +271,7 @@ function populatePlot(plotObj, type, playSound = true) {
 function syncVehiclesCount(targetCount) {
   while (vehicles.length < targetCount) {
     const car = createVehicleMesh(ROAD_COORDS);
-    car.userData.beamMat.opacity = isNightLightActive() ? 0.24 : 0.0;
+    car.userData.beamMat.opacity = isNightLightActive() ? 0.26 : 0.0;
     scene.add(car);
     vehicles.push(car);
   }
@@ -260,7 +297,7 @@ function syncPedestriansCount(targetCount) {
   document.getElementById('stat-peds').textContent = pedestrians.length;
 }
 
-// --- Weather & Atmosphere System (Clouds, Rain, Snow, Fog, Day/Night) ---
+// --- Weather & Atmosphere System ---
 let currentWeather = 'sunny';
 const cloudsGroup = new THREE.Group();
 scene.add(cloudsGroup);
@@ -327,7 +364,7 @@ function isNightLightActive() {
 }
 
 function applyLightingToNewPlot(group) {
-  const emissiveVal = currentWeather === 'night' ? 1.15 : isNightLightActive() ? 0.65 : 0.15;
+  const emissiveVal = currentWeather === 'night' ? 1.35 : isNightLightActive() ? 0.78 : 0.18;
   if (group.userData.emissiveMeshes) {
     group.userData.emissiveMeshes.forEach((m) => {
       m.emissiveIntensity = emissiveVal;
@@ -347,59 +384,59 @@ function setWeather(mode) {
       fogDensity: 0.004,
       sunColor: 0xfff6e5,
       sunInt: 1.5,
-      hemiInt: 0.85,
+      hemiInt: 0.88,
       sunPos: [55, 78, 45],
-      groundColor: 0x2b3440
+      groundColor: 0x90a4ae
     },
     sunset: {
       sky: 0xff7b54,
       fogColor: 0xff9770,
-      fogDensity: 0.006,
+      fogDensity: 0.0058,
       sunColor: 0xff8c42,
-      sunInt: 1.25,
+      sunInt: 1.3,
       hemiInt: 0.65,
       sunPos: [-68, 26, 40],
-      groundColor: 0x2d2a38
+      groundColor: 0x8d6e63
     },
     night: {
       sky: 0x070d19,
       fogColor: 0x070d19,
-      fogDensity: 0.0065,
+      fogDensity: 0.0062,
       sunColor: 0x5c7cfa,
       sunInt: 0.32,
-      hemiInt: 0.28,
+      hemiInt: 0.3,
       sunPos: [-40, 60, -40],
-      groundColor: 0x161c28
+      groundColor: 0x37474f
     },
     rain: {
       sky: 0x263238,
       fogColor: 0x263238,
-      fogDensity: 0.0095,
+      fogDensity: 0.009,
       sunColor: 0x90a4ae,
-      sunInt: 0.48,
+      sunInt: 0.52,
       hemiInt: 0.45,
       sunPos: [20, 65, 20],
-      groundColor: 0x1c252c
+      groundColor: 0x455a64
     },
     snow: {
       sky: 0xcfd8dc,
       fogColor: 0xcfd8dc,
-      fogDensity: 0.009,
+      fogDensity: 0.0088,
       sunColor: 0xffffff,
-      sunInt: 0.95,
-      hemiInt: 0.85,
+      sunInt: 0.98,
+      hemiInt: 0.88,
       sunPos: [40, 65, 30],
-      groundColor: 0xdce4ec
+      groundColor: 0xeceff1
     },
     fog: {
       sky: 0xb0bec5,
       fogColor: 0xb0bec5,
-      fogDensity: 0.0175,
+      fogDensity: 0.017,
       sunColor: 0xeceff1,
-      sunInt: 0.65,
-      hemiInt: 0.7,
+      sunInt: 0.68,
+      hemiInt: 0.72,
       sunPos: [30, 50, 30],
-      groundColor: 0x37474f
+      groundColor: 0x78909c
     }
   };
 
@@ -414,11 +451,13 @@ function setWeather(mode) {
 
   if (window.__cityGroundMat) {
     window.__cityGroundMat.color.setHex(cfg.groundColor);
-    window.__cityGroundMat.roughness = mode === 'rain' ? 0.25 : 0.88;
+    window.__cityGroundMat.roughness = mode === 'rain' ? 0.2 : 0.85;
+  }
+  if (window.__cityRoadMat) {
+    window.__cityRoadMat.roughness = mode === 'rain' ? 0.18 : 0.72;
   }
 
-  // Toggle Building Window Glow, Streetlamps, Car Headlights & Pedestrian Umbrellas
-  const nightGlow = mode === 'night' ? 1.2 : isNightLightActive() ? 0.72 : 0.15;
+  const nightGlow = mode === 'night' ? 1.35 : isNightLightActive() ? 0.78 : 0.18;
   plots.forEach((p) => {
     if (p.contentGroup && p.contentGroup.userData.emissiveMeshes) {
       p.contentGroup.userData.emissiveMeshes.forEach((m) => {
@@ -428,7 +467,7 @@ function setWeather(mode) {
   });
 
   streetLamps.forEach((l) => {
-    l.userData.bulbMat.emissiveIntensity = isNightLightActive() ? 1.6 : 0.15;
+    l.userData.bulbMat.emissiveIntensity = isNightLightActive() ? 1.65 : 0.15;
   });
 
   vehicles.forEach((v) => {
@@ -460,7 +499,6 @@ const bloxxState = {
 
 function startTowerBloxxOnPlot(plotObj) {
   if (!plotObj) {
-    // Pick plot near center
     plotObj = plots.find((p) => p.row === 2 && p.col === 1) || plots[7];
   }
 
@@ -472,7 +510,6 @@ function startTowerBloxxOnPlot(plotObj) {
   bloxxState.dropping = false;
   bloxxState.targetFloors = 8;
 
-  // Clear existing plot content and prepare Tower Group
   if (plotObj.contentGroup) {
     scene.remove(plotObj.contentGroup);
   }
@@ -481,14 +518,13 @@ function startTowerBloxxOnPlot(plotObj) {
   towerGroup.position.set(plotObj.x, 0, plotObj.z);
 
   const basePad = new THREE.Mesh(
-    new THREE.BoxGeometry(PLOT_SIZE - 0.6, 0.4, PLOT_SIZE - 0.6),
-    new THREE.MeshStandardMaterial({ color: 0x37474f, roughness: 0.8 })
+    new THREE.BoxGeometry(PLOT_SIZE - 0.5, 0.4, PLOT_SIZE - 0.5),
+    new THREE.MeshStandardMaterial({ map: createSidewalkTexture(), roughness: 0.8 })
   );
   basePad.position.y = 0.2;
   basePad.receiveShadow = true;
   towerGroup.add(basePad);
 
-  // Corner trees for the Tower Bloxx plot
   const trees = [];
   [[-4.2, -4.2], [4.2, -4.2], [-4.2, 4.2], [4.2, 4.2]].forEach(([tx, tz], idx) => {
     const tr = createTreeMesh(idx % 2 === 0 ? 'oak' : 'cherry');
@@ -519,7 +555,6 @@ function startTowerBloxxOnPlot(plotObj) {
   plotObj.contentGroup = towerGroup;
   bloxxState.towerGroup = towerGroup;
 
-  // Create overhead 3D Crane Cable & Clamp
   if (bloxxState.craneGroup) scene.remove(bloxxState.craneGroup);
   const craneGroup = new THREE.Group();
   const cable = new THREE.Mesh(
@@ -536,7 +571,6 @@ function startTowerBloxxOnPlot(plotObj) {
   scene.add(craneGroup);
   bloxxState.craneGroup = craneGroup;
 
-  // Spawn first floor automatically as foundation
   const firstFloor = createTowerBloxxFloor(0);
   firstFloor.position.set(0, 1.1, 0);
   stackedContainer.add(firstFloor);
@@ -548,7 +582,6 @@ function startTowerBloxxOnPlot(plotObj) {
   updateBloxxHUD();
   document.getElementById('bloxx-hud').classList.remove('hidden');
 
-  // Focus camera nicely on the active Tower Bloxx plot
   cameraMode = 'orbit';
   updateCameraButtonsUI();
   controls.target.set(plotObj.x, 6, plotObj.z);
@@ -570,6 +603,7 @@ function dropActiveBloxxFloor() {
   if (!bloxxState.active || bloxxState.dropping || !bloxxState.swingBlock) return;
   bloxxState.dropping = true;
   bloxxState.dropVelY = -18;
+  vibrateDevice(15);
 }
 
 function showBloxxFeedback(text, color = '#00e5ff') {
@@ -585,7 +619,6 @@ function showBloxxFeedback(text, color = '#00e5ff') {
 function finishTowerBloxx() {
   if (!bloxxState.active) return;
 
-  // Add iconic Red Spire & Gold Flag roof!
   const stackedContainer = bloxxState.towerGroup.userData.stackedContainer;
   const topFloor = bloxxState.floors[bloxxState.floors.length - 1];
   const roof = createTowerBloxxRoof();
@@ -606,6 +639,7 @@ function finishTowerBloxx() {
   bloxxState.active = false;
   document.getElementById('bloxx-hud').classList.add('hidden');
   sfx.playBuild();
+  vibrateDevice([40, 60, 80]);
   updateHUDStats();
 }
 
@@ -633,7 +667,6 @@ function updateTowerBloxx(dt) {
     bloxxState.craneGroup.position.set(plotX + swingX, craneHeight + 1.2, plotZ + swingZ);
   }
 
-  // Subtle tower sway when tall
   bloxxState.wobblePhase += dt * 2.5;
   const stackedContainer = bloxxState.towerGroup.userData.stackedContainer;
   if (stackedContainer && bloxxState.floors.length > 3) {
@@ -657,14 +690,15 @@ function updateTowerBloxx(dt) {
       const dist = Math.hypot(localX - prevFloor.position.x, localZ - prevFloor.position.z);
 
       if (dist < 2.65) {
-        // Landed successfully!
         const isPerfect = dist < 0.55;
         if (isPerfect) {
           bloxxState.combo += 1;
           showBloxxFeedback(`✨ PERFECT 完美对齐! x${bloxxState.combo}`, '#ffc400');
+          vibrateDevice([30, 40, 60]);
         } else {
           bloxxState.combo = 1;
           showBloxxFeedback('👍 GOOD 稳固叠层!', '#00e5ff');
+          vibrateDevice(30);
         }
 
         sfx.playDrop(bloxxState.combo, isPerfect);
@@ -694,8 +728,8 @@ function updateTowerBloxx(dt) {
           spawnNextSwingBlock();
         }
       } else {
-        // Missed the tower!
         sfx.playMiss();
+        vibrateDevice([80, 50, 80]);
         bloxxState.combo = 1;
         showBloxxFeedback('💥 偏离中心，重新吊装！', '#ff5252');
         updateBloxxHUD();
@@ -725,7 +759,7 @@ function updateHUDStats() {
   document.getElementById('stat-trees').textContent = treeTotal;
 }
 
-// --- Raycasting & User Interaction ---
+// --- Raycasting & User Interaction (PC Mouse & Mobile Touch) ---
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let activeTool = 'inspect';
@@ -739,7 +773,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 
 renderer.domElement.addEventListener('pointerup', (e) => {
   const moveDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
-  if (moveDist > 6) return; // Ignore camera drag
+  if (moveDist > 9) return; // Ignore camera drag/pinch
 
   if (bloxxState.active) {
     dropActiveBloxxFloor();
@@ -753,7 +787,6 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const intersects = raycaster.intersectObjects(scene.children, true);
   if (!intersects.length) return;
 
-  // Find root entity or plot
   let hitObj = intersects[0].object;
   let foundEntity = null;
   let foundPlot = null;
@@ -818,7 +851,17 @@ function openInspector(entity) {
   };
 }
 
-// --- UI Bindings ---
+// --- UI Bindings & Mobile Drawer ---
+const rightPanel = document.getElementById('right-panel');
+const mobileDrawerBtn = document.getElementById('btn-mobile-drawer');
+if (mobileDrawerBtn) {
+  mobileDrawerBtn.addEventListener('click', () => {
+    const isOpen = rightPanel.classList.toggle('mobile-open');
+    mobileDrawerBtn.classList.toggle('active', isOpen);
+    sfx.playTone(500, 0.06);
+  });
+}
+
 document.getElementById('insp-close').onclick = () => {
   document.getElementById('inspector-card').classList.add('hidden');
 };
@@ -931,7 +974,6 @@ function animate() {
   const dt = rawDt * simSpeed;
   const elapsed = clock.elapsedTime;
 
-  // Animate plot pop-in & park fountains & wind on trees
   const windStrength = currentWeather === 'rain' ? 0.14 : 0.045;
   plots.forEach((p) => {
     const cg = p.contentGroup;
@@ -958,13 +1000,11 @@ function animate() {
     }
   });
 
-  // Update Clouds
   cloudsGroup.children.forEach((c) => {
     c.position.x += c.userData.speed * dt;
     if (c.position.x > 75) c.position.x = -75;
   });
 
-  // Update Rain / Lightning
   if (currentWeather === 'rain') {
     const pos = rainGeo.attributes.position.array;
     for (let i = 0; i < RAIN_COUNT; i++) {
@@ -982,13 +1022,12 @@ function animate() {
       sunLight.intensity = 3.8;
       sfx.playThunder();
       setTimeout(() => {
-        if (currentWeather === 'rain') sunLight.intensity = 0.48;
+        if (currentWeather === 'rain') sunLight.intensity = 0.52;
       }, 110);
       lightningTimer = 6 + Math.random() * 8;
     }
   }
 
-  // Update Snow
   if (currentWeather === 'snow') {
     const pos = snowGeo.attributes.position.array;
     for (let i = 0; i < SNOW_COUNT; i++) {
@@ -1001,14 +1040,11 @@ function animate() {
     snowGeo.attributes.position.needsUpdate = true;
   }
 
-  // Update Vehicles & Pedestrians
   vehicles.forEach((car) => updateVehicle(car, dt, ROAD_COORDS));
   pedestrians.forEach((ped) => updatePedestrian(ped, dt));
 
-  // Update 3D Tower Bloxx Mini-Game
   updateTowerBloxx(rawDt);
 
-  // Camera Modes
   if (cameraMode === 'drone') {
     droneAngle += rawDt * 0.22;
     camera.position.set(Math.cos(droneAngle) * 62, 34 + Math.sin(droneAngle * 2) * 6, Math.sin(droneAngle) * 62);
