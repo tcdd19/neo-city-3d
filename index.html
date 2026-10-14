@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Neo City 3D - Three.js 3D 城市生态与摩天盖楼游戏</title>
+  <meta name="description" content="基于 Three.js 构建的 3D 城市模拟与 Tower Bloxx 盖楼游戏，包含建筑、车流、行人、植物与实时天气系统。" />
+  <link rel="stylesheet" href="style.css" />
+  <!-- Three.js & OrbitControls via CDN -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- 3D WebGL Canvas Container -->
+  <div id="canvas-container"></div>
+
+  <!-- Top HUD Bar -->
+  <header id="top-hud">
+    <div class="brand-box">
+      <div class="brand-logo">🏙️</div>
+      <div class="brand-text">
+        <h1>NEO CITY <span>3D</span></h1>
+        <p>Three.js 城市生态 · 吊装盖楼沙盒</p>
+      </div>
+    </div>
+
+    <div class="stats-bar">
+      <div class="stat-pill" title="城市总人口">
+        <span class="stat-icon">👥</span>
+        <div>
+          <small>城市人口</small>
+          <strong id="stat-pop">1,280</strong>
+        </div>
+      </div>
+      <div class="stat-pill" title="建筑总数">
+        <span class="stat-icon">🏢</span>
+        <div>
+          <small>建筑楼宇</small>
+          <strong id="stat-buildings">24</strong>
+        </div>
+      </div>
+      <div class="stat-pill" title="行驶车辆">
+        <span class="stat-icon">🚗</span>
+        <div>
+          <small>动态车辆</small>
+          <strong id="stat-cars">18</strong>
+        </div>
+      </div>
+      <div class="stat-pill" title="城市行人">
+        <span class="stat-icon">🚶</span>
+        <div>
+          <small>街头行人</small>
+          <strong id="stat-peds">36</strong>
+        </div>
+      </div>
+      <div class="stat-pill" title="绿植树木">
+        <span class="stat-icon">🌳</span>
+        <div>
+          <small>植物绿化</small>
+          <strong id="stat-trees">85</strong>
+        </div>
+      </div>
+    </div>
+
+    <div class="top-actions">
+      <button id="btn-audio" class="icon-btn" title="音效开关">🔊</button>
+      <button id="btn-help" class="icon-btn" title="操作指南">❔</button>
+    </div>
+  </header>
+
+  <!-- Right Panel: Weather & Camera Controls -->
+  <aside id="right-panel">
+    <div class="panel-card">
+      <div class="panel-title">🌦️ 实时天气与光影</div>
+      <div class="weather-grid" id="weather-buttons">
+        <button class="weather-btn active" data-weather="sunny">☀️ 晴朗白昼</button>
+        <button class="weather-btn" data-weather="sunset">🌇 黄昏落日</button>
+        <button class="weather-btn" data-weather="night">🌃 璀璨夜景</button>
+        <button class="weather-btn" data-weather="rain">🌧️ 倾盆大雨</button>
+        <button class="weather-btn" data-weather="snow">❄️ 漫天飞雪</button>
+        <button class="weather-btn" data-weather="fog">🌫️ 迷雾晨曦</button>
+      </div>
+    </div>
+
+    <div class="panel-card">
+      <div class="panel-title">🎥 视角漫游切换</div>
+      <div class="camera-grid" id="camera-buttons">
+        <button class="cam-btn active" data-cam="orbit">🦅 自由鸟瞰</button>
+        <button class="cam-btn" data-cam="drone">🚁 航拍环游</button>
+        <button class="cam-btn" data-cam="car">🚘 跟随车辆</button>
+        <button class="cam-btn" data-cam="ped">🚶 跟随行人</button>
+      </div>
+    </div>
+
+    <div class="panel-card">
+      <div class="panel-title">⚡ 城市生态调控</div>
+      <div class="slider-row">
+        <label>🚗 车流密度 <span id="val-cars">18</span></label>
+        <input type="range" id="slider-cars" min="4" max="40" value="18" />
+      </div>
+      <div class="slider-row">
+        <label>🚶 行人数量 <span id="val-peds">36</span></label>
+        <input type="range" id="slider-peds" min="8" max="70" value="36" />
+      </div>
+      <div class="slider-row">
+        <label>⏱️ 城市倍速 <span id="val-speed">1.0x</span></label>
+        <input type="range" id="slider-speed" min="0.2" max="2.5" step="0.1" value="1.0" />
+      </div>
+    </div>
+  </aside>
+
+  <!-- Selected Entity Inspector Toast -->
+  <div id="inspector-card" class="hidden">
+    <div class="inspector-header">
+      <span id="insp-title">🏢 摩天商业大厦</span>
+      <button id="insp-close">✕</button>
+    </div>
+    <p id="insp-desc">状态：正常运营 · 容纳 240 人</p>
+    <div class="inspector-actions">
+      <button id="insp-follow" class="small-btn">🎥 锁定跟随</button>
+      <button id="insp-crane" class="small-btn accent hidden">🏗️ 在此吊装加盖</button>
+    </div>
+  </div>
+
+  <!-- Tower Bloxx 3D Crane Mini-Game Overlay -->
+  <div id="bloxx-hud" class="hidden">
+    <div class="bloxx-banner">
+      <div class="bloxx-title">🏗️ 3D 摩天吊装盖楼模式 (Tower Bloxx 3D)</div>
+      <div class="bloxx-metrics">
+        <span>当前层数: <strong id="bloxx-floor">0</strong> / <strong id="bloxx-target">8</strong></span>
+        <span>连击 Combo: <strong id="bloxx-combo">x1</strong></span>
+        <span>本栋人口: <strong id="bloxx-score">0</strong></span>
+      </div>
+      <div class="bloxx-controls">
+        <button id="btn-drop-block" class="drop-btn">⬇️ 释放楼层 (空格 / 点击)</button>
+        <button id="btn-finish-bloxx" class="exit-btn">✅ 封顶完工</button>
+      </div>
+    </div>
+    <div id="bloxx-feedback" class="bloxx-feedback"></div>
+  </div>
+
+  <!-- Bottom Toolbar: Gameplay Modes & Sandbox Build Tools -->
+  <footer id="bottom-dock">
+    <div class="mode-tabs">
+      <button class="dock-btn active" data-tool="inspect" title="点击查看城市中的建筑、车辆、行人或树木">
+        <span class="dock-icon">🔍</span>
+        <span class="dock-label">漫游观察</span>
+      </button>
+      <button class="dock-btn highlight-crane" data-tool="tower-bloxx" title="进入 Tower Bloxx 3D 吊钩盖楼挑战">
+        <span class="dock-icon">🏗️</span>
+        <span class="dock-label">3D 吊装盖楼</span>
+      </button>
+      <button class="dock-btn" data-tool="build-skyscraper" title="在空地或地块直接建造现代摩天大楼">
+        <span class="dock-icon">🏙️</span>
+        <span class="dock-label">建摩天楼</span>
+      </button>
+      <button class="dock-btn" data-tool="build-residential" title="建造温馨阳光公寓楼">
+        <span class="dock-icon">🏘️</span>
+        <span class="dock-label">建公寓楼</span>
+      </button>
+      <button class="dock-btn" data-tool="build-shop" title="建造霓虹商业中心">
+        <span class="dock-icon">🏪</span>
+        <span class="dock-label">建商业街</span>
+      </button>
+      <button class="dock-btn" data-tool="build-park" title="种植城市公园、樱花树、松柏与喷泉">
+        <span class="dock-icon">🌳</span>
+        <span class="dock-label">种植物公园</span>
+      </button>
+      <button class="dock-btn" data-tool="demolish" title="拆除地块上的建筑以重新规划">
+        <span class="dock-icon">🚜</span>
+        <span class="dock-label">清理地块</span>
+      </button>
+    </div>
+    <div id="tool-hint" class="tool-hint">
+      💡 提示：左键拖拽旋转视角，右键平移，滚轮缩放；点击车辆或行人可第一视角跟随，点击【🏗️ 3D 吊装盖楼】体验立体盖楼！
+    </div>
+  </footer>
+
+  <!-- Help Modal -->
+  <div id="help-modal" class="modal-backdrop hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2>🏙️ Neo City 3D 玩法指南</h2>
+        <button id="close-help">✕</button>
+      </div>
+      <div class="modal-body">
+        <ul>
+          <li><strong>🌦️ 6 种动态天气切换：</strong>右侧面板可随时切换【晴朗白昼、黄昏落日、璀璨夜景、倾盆大雨、漫天飞雪、迷雾晨曦】，建筑窗户、路灯与车灯会自动感应点亮，行人遇雨还会撑伞！</li>
+          <li><strong>🏗️ 3D Tower Bloxx 吊装盖楼：</strong>点击底部【3D 吊装盖楼】或任意施工地块，高空起重机将摆动吊起标准层，按 <code>空格键</code> 或点击屏幕即可释放叠楼，对准中心可触发 <strong>PERFECT 完美连击</strong>！</li>
+          <li><strong>🌳 自由规划建筑与植物：</strong>底部工具栏支持随时在城市地块上新建摩天楼、居民公寓、霓虹商业街或城市绿植公园（含阔叶树、樱花树、松树、灌木与喷泉）。</li>
+          <li><strong>🚗 鲜活车流与行人跟随：</strong>点击任意行驶的汽车、公交车或街头的行人，或者使用右侧【视角漫游切换】，即可进入第一/第三人称沉浸漫游！</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
